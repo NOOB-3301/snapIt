@@ -19,6 +19,7 @@ enum QuickAction: String, CaseIterable, Identifiable {
 /// One snap and the conversation about it. Saved to history before the first request goes out.
 @MainActor final class SnapSession: ObservableObject {
     let thumbnail: NSImage
+    @Published var extraThumbnails: [NSImage] = []
     @Published var turns: [Turn] = []
     @Published var busy = false
     @Published var status = ""
@@ -27,6 +28,8 @@ enum QuickAction: String, CaseIterable, Identifiable {
     @Published var deadLinks: [String] = []
 
     private let png: Data
+    private var extras: [Data] = []
+    private var unsent: [Data] = []   // later snaps the running Claude process has not seen yet
     private let contextTask: Task<SnapContext, Never>
     private var record: SnapRecord
     private var saved = false
@@ -93,6 +96,14 @@ enum QuickAction: String, CaseIterable, Identifiable {
         return parts.filter { !$0.isEmpty }.joined(separator: "  ·  ")
     }
 
+    /// A later snap joins this conversation; it goes out with the next question. History keeps only the first snap.
+    func add(image: CGImage) {
+        let data = SnapSession.encode(image)
+        extras.append(data)
+        unsent.append(data)
+        extraThumbnails.append(NSImage(cgImage: image, size: NSSize(width: image.width, height: image.height)))
+    }
+
     var lastAnswer: String { turns.last(where: { $0.role == "assistant" })?.text ?? "" }
 
     /// `shown` goes in the transcript; `sending` is the full instruction when a quick action stands behind a short label.
@@ -144,7 +155,7 @@ enum QuickAction: String, CaseIterable, Identifiable {
             let context = await contextTask.value
             guard busy else { return }
             // A fresh process knows nothing yet: give it the image, the context and what was said so far.
-            var text = question, image: Data?
+            var text = question, images: [Data] = unsent
             if engine?.isAlive != true {
                 guard let fresh = EnginePool.shared.take() else {
                     finish(error: EnginePool.shared.cli == nil
@@ -153,11 +164,12 @@ enum QuickAction: String, CaseIterable, Identifiable {
                     return
                 }
                 engine = fresh
-                image = png
+                images = [png] + extras
                 text = SnapSession.prompt(question: question, context: context, earlier: earlier)
             }
             let current = engine
-            current?.send(text: text, imagePNG: image) { [weak self] event in
+            unsent = []
+            current?.send(text: text, images: images) { [weak self] event in
                 Task { @MainActor in
                     guard let self, self.engine === current else { return }   // ignore a stopped or replaced process
                     self.handle(event)
@@ -298,6 +310,8 @@ enum QuickAction: String, CaseIterable, Identifiable {
         panel.makeKeyAndOrderFront(nil)
     }
 
+    func bringToFront() { panel.orderFrontRegardless() }
+
     func windowWillClose(_ notification: Notification) {
         session.stop()
         onClose?()
@@ -313,8 +327,10 @@ private struct AskView: View {
     var body: some View {
         VStack(alignment: .leading, spacing: 8) {
             HStack(alignment: .top, spacing: 8) {
-                Image(nsImage: session.thumbnail).resizable().aspectRatio(contentMode: .fit)
-                    .frame(maxWidth: 110, maxHeight: 54).clipShape(RoundedRectangle(cornerRadius: 4))
+                ForEach(Array(([session.thumbnail] + session.extraThumbnails).enumerated()), id: \.offset) { _, image in
+                    Image(nsImage: image).resizable().aspectRatio(contentMode: .fit)
+                        .frame(maxWidth: 110, maxHeight: 54).clipShape(RoundedRectangle(cornerRadius: 4))
+                }
                 Text(session.contextLine).font(.caption).foregroundStyle(.secondary).lineLimit(3)
                 Spacer()
             }

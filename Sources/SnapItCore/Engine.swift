@@ -96,13 +96,13 @@ public final class ClaudeSession {
     public var isAlive: Bool { process.isRunning }
 
     /// Events arrive on a background queue. Exactly one `.done` or `.failed` ends the turn.
-    public func send(text: String, imagePNG: Data?, onEvent: @escaping (EngineEvent) -> Void) {
+    public func send(text: String, images: [Data], onEvent: @escaping (EngineEvent) -> Void) {
         queue.async {
             self.handler = onEvent
             self.armWatchdog()
             var content: [[String: Any]] = []
-            if let imagePNG {
-                content.append(["type": "image", "source": ["type": "base64", "media_type": "image/png", "data": imagePNG.base64EncodedString()]])
+            for image in images {
+                content.append(["type": "image", "source": ["type": "base64", "media_type": "image/png", "data": image.base64EncodedString()]])
             }
             content.append(["type": "text", "text": text])
             let message: [String: Any] = ["type": "user", "message": ["role": "user", "content": content]]

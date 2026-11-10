@@ -221,7 +221,13 @@ private final class OverlayView: NSView {
     }
 
     private func openAsk(image: CGImage, near rect: NSRect, front: NSRunningApplication?) {
-        show(SnapSession(image: image, front: front), near: rect)
+        // A snap taken while a chat is open joins the newest chat instead of opening another window.
+        if let latest = panels.last {
+            latest.session.add(image: image)
+            latest.bringToFront()
+        } else {
+            show(SnapSession(image: image, front: front), near: rect)
+        }
     }
 
     func reopen(_ record: SnapRecord) {

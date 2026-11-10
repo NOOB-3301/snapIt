@@ -207,7 +207,7 @@ func liveEngineAnswersAboutAnImageAndRemembers() async throws {
     func ask(_ text: String, image: Data?) async -> (String, EngineEvent) {
         await withCheckedContinuation { done in
             var answer = ""
-            session.send(text: text, imagePNG: image) { event in
+            session.send(text: text, images: image.map { [$0] } ?? []) { event in
                 switch event {
                 case .text(let delta): answer += delta
                 case .done, .failed: done.resume(returning: (answer, event))
