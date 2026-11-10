@@ -1,0 +1,60 @@
+<!doctype html>
+<html>
+<head>
+<meta charset="utf-8">
+<link rel="stylesheet" href="katex.min.css">
+<style>
+:root { color-scheme: light dark; }
+body { font: 13px/1.5 -apple-system, system-ui; margin: 0; padding: 4px 6px; background: transparent; color: CanvasText; overflow-wrap: anywhere; }
+.q { margin: 10px 0 6px auto; padding: 5px 10px; border-radius: 10px; background: rgba(127,127,127,.18); width: fit-content; max-width: 85%; white-space: pre-wrap; }
+.a > *:first-child { margin-top: 0; }
+pre { background: rgba(127,127,127,.15); padding: 8px; border-radius: 6px; overflow-x: auto; }
+code { font: 12px ui-monospace, Menlo, monospace; }
+table { border-collapse: collapse; } td, th { border: 1px solid rgba(127,127,127,.4); padding: 3px 7px; }
+a { color: #2a7de1; } a.dead { text-decoration: line-through; color: gray; } a.dead::after { content: " (dead link)"; }
+.katex-display { overflow-x: auto; overflow-y: hidden; }
+</style>
+</head>
+<body>
+<div id="root"></div>
+<script src="marked.min.js"></script>
+<script src="katex.min.js"></script>
+<script>
+const esc = s => s.replace(/[&<>"]/g, c => ({'&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;'}[c]));
+// Answers can carry text from web pages: raw HTML is shown as text, images become links
+// (a remote image would send its URL out the moment it loads), and only web/mail schemes stay clickable.
+const anchor = (href, text) => /^(https?:|mailto:)/i.test(href || '') || (href || '').startsWith('#')
+  ? `<a href="${esc(href || '')}">${text}</a>` : (text || esc(href || ''));
+marked.use({renderer: {
+  html: h => esc(h),
+  link: (href, title, text) => anchor(href, text),
+  image: (href, title, text) => anchor(href, esc(text || 'image')),
+}});
+
+function md(src) {
+  const math = [];
+  src = src.replace(/\\\$/g, '');   // literal dollar signs, restored below
+  // Pull maths out before Markdown runs, or it would eat the underscores and backslashes.
+  src = src.replace(/\$\$([\s\S]+?)\$\$|\\\[([\s\S]+?)\\\]|\\\(([\s\S]+?)\\\)|\$([^\s$](?:[^$\n]*?[^\s$])?)\$(?!\d)/g, (m, a, b, c, d) => {
+    math.push({tex: a ?? b ?? c ?? d, display: a !== undefined || b !== undefined});
+    return '' + (math.length - 1) + '';
+  });
+  return marked.parse(src).replace(/(\d+)/g, (m, i) => {
+    const x = math[i];
+    try { return katex.renderToString(x.tex.replace(//g, '\\$'), {displayMode: x.display, throwOnError: false}); }
+    catch (e) { return esc(x.tex); }
+  }).replace(//g, '$');
+}
+
+function render(turns, dead) {
+  const atBottom = innerHeight + scrollY >= document.body.scrollHeight - 30;
+  const root = document.getElementById('root');
+  root.innerHTML = turns.map(t => t.role === 'user'
+    ? `<div class="q">${esc(t.text)}</div>`
+    : `<div class="a">${t.text ? md(t.text) : ''}</div>`).join('');
+  for (const a of root.querySelectorAll('a')) if (dead.includes(a.getAttribute('href'))) a.classList.add('dead');
+  if (atBottom) scrollTo(0, document.body.scrollHeight);
+}
+</script>
+</body>
+</html>

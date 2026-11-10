@@ -1,0 +1,24 @@
+{
+    "configurations": [
+        {
+            "type": "swift",
+            "request": "launch",
+            "args": [],
+            "cwd": "${workspaceFolder:snapIt}",
+            "name": "Debug SnapIt",
+            "target": "SnapIt",
+            "configuration": "debug",
+            "preLaunchTask": "swift: Build Debug SnapIt"
+        },
+        {
+            "type": "swift",
+            "request": "launch",
+            "args": [],
+            "cwd": "${workspaceFolder:snapIt}",
+            "name": "Release SnapIt",
+            "target": "SnapIt",
+            "configuration": "release",
+            "preLaunchTask": "swift: Build Release SnapIt"
+        }
+    ]
+}
