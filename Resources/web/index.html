@@ -4,15 +4,53 @@
 <meta charset="utf-8">
 <link rel="stylesheet" href="katex.min.css">
 <style>
-:root { color-scheme: light dark; }
-body { font: 13px/1.5 -apple-system, system-ui; margin: 0; padding: 4px 6px; background: transparent; color: CanvasText; overflow-wrap: anywhere; }
-.q { margin: 10px 0 6px auto; padding: 5px 10px; border-radius: 10px; background: rgba(127,127,127,.18); width: fit-content; max-width: 85%; white-space: pre-wrap; }
+:root { color-scheme: light dark; --accent: -apple-system-control-accent; --line: rgba(127,127,127,.28); --fill: rgba(127,127,127,.14); }
+* { box-sizing: border-box; }
+body { font: 14px/1.6 -apple-system, system-ui; margin: 0; padding: 12px 16px 20px; background: transparent; color: CanvasText; overflow-wrap: anywhere; -webkit-font-smoothing: antialiased; }
+#root { max-width: 680px; margin: 0 auto; }
+::selection { background: color-mix(in srgb, var(--accent) 35%, transparent); }
+
+.q { margin: 18px 0 10px auto; padding: 6px 12px; border-radius: 14px 14px 4px 14px; width: fit-content; max-width: 85%; white-space: pre-wrap;
+     background: color-mix(in srgb, var(--accent) 22%, transparent); }
+.q:first-child { margin-top: 0; }
 .a > *:first-child { margin-top: 0; }
-pre { background: rgba(127,127,127,.15); padding: 8px; border-radius: 6px; overflow-x: auto; }
-code { font: 12px ui-monospace, Menlo, monospace; }
-table { border-collapse: collapse; } td, th { border: 1px solid rgba(127,127,127,.4); padding: 3px 7px; }
-a { color: #2a7de1; } a.dead { text-decoration: line-through; color: gray; } a.dead::after { content: " (dead link)"; }
-.katex-display { overflow-x: auto; overflow-y: hidden; }
+
+h1, h2, h3, h4 { line-height: 1.3; margin: 1.4em 0 .5em; font-weight: 650; }
+h1 { font-size: 20px; } h2 { font-size: 17px; } h3 { font-size: 15px; } h4 { font-size: 14px; }
+p, ul, ol, blockquote, table, pre { margin: 0 0 .8em; }
+ul, ol { padding-left: 1.4em; } li { margin: .2em 0; } li > p { margin: 0; }
+blockquote { padding: 2px 12px; border-left: 3px solid var(--line); color: color-mix(in srgb, CanvasText 70%, transparent); }
+hr { border: 0; border-top: 1px solid var(--line); margin: 1.2em 0; }
+strong { font-weight: 650; }
+
+code { font: 12.5px/1.5 ui-monospace, Menlo, monospace; }
+:not(pre) > code { background: var(--fill); padding: 1px 5px; border-radius: 4px; }
+pre { position: relative; background: var(--fill); padding: 10px 12px; border-radius: 8px; overflow-x: auto; }
+
+.tablewrap { overflow-x: auto; margin: 0 0 .8em; }
+table { border-collapse: collapse; margin: 0; font-size: 13px; }
+td, th { border-bottom: 1px solid var(--line); padding: 5px 10px; text-align: left; }
+th { font-weight: 650; border-bottom-width: 2px; }
+
+a { color: var(--accent); text-decoration: none; } a:hover { text-decoration: underline; }
+a.dead { text-decoration: line-through; color: gray; } a.dead::after { content: " (dead link)"; }
+
+.katex { font-size: 1.08em; }
+.katex-display { margin: .9em 0; padding: 2px 0; overflow-x: auto; overflow-y: hidden; }
+
+/* Buttons drawn by the page: answer actions and code copy. */
+button { font: 11px -apple-system, system-ui; color: inherit; background: var(--fill); border: 0; border-radius: 5px; padding: 3px 8px; cursor: default; opacity: .75; }
+button:hover { opacity: 1; }
+pre > button { position: absolute; top: 6px; right: 6px; opacity: 0; transition: opacity .15s; }
+pre:hover > button { opacity: .9; }
+.actions { display: flex; gap: 6px; margin: 2px 0 6px; opacity: 0; transition: opacity .15s; }
+.a:hover > .actions, .a.last > .actions { opacity: 1; }
+.a.streaming > .actions, .a:not(.last) .regen, body.noregen .regen { display: none; }
+
+/* Waiting for the first token, then a caret while text streams. */
+.a.streaming.empty::before { content: "● ● ●"; font-size: 8px; letter-spacing: 3px; color: gray; animation: pulse 1.2s ease-in-out infinite; }
+@keyframes pulse { 50% { opacity: .3; } }
+@media (prefers-reduced-motion: reduce) { * { animation: none !important; transition: none !important; } }
 </style>
 </head>
 <body>
@@ -46,13 +84,63 @@ function md(src) {
   }).replace(//g, '$');
 }
 
-function render(turns, dead) {
-  const atBottom = innerHeight + scrollY >= document.body.scrollHeight - 30;
+function render(turns, dead, busy, canRegenerate) {
+  queued = {turns, dead: dead || [], busy: !!busy, canRegenerate: canRegenerate !== false};
+  if (!frame) frame = requestAnimationFrame(paint);
+}
+
+let queued = null, frame = 0;
+const nodes = [], keys = [];
+const post = m => window.webkit && webkit.messageHandlers.snapit && webkit.messageHandlers.snapit.postMessage(m);
+const button = (label, cls, onclick) => {
+  const b = document.createElement('button');
+  b.textContent = label; b.className = cls; b.onclick = onclick;
+  return b;
+};
+const flash = (b, label) => { b.textContent = 'Copied'; setTimeout(() => { b.textContent = label; }, 1200); };
+
+function decorate(el, source) {
+  for (const table of el.querySelectorAll('table')) {
+    const wrap = document.createElement('div');
+    wrap.className = 'tablewrap';
+    table.replaceWith(wrap); wrap.appendChild(table);
+  }
+  for (const pre of el.querySelectorAll('pre')) {
+    const text = pre.innerText;
+    pre.appendChild(button('Copy', '', e => { post({copy: text}); flash(e.target, 'Copy'); }));
+  }
+  const actions = document.createElement('div');
+  actions.className = 'actions';
+  actions.appendChild(button('Copy', '', e => { post({copy: source}); flash(e.target, 'Copy'); }));
+  actions.appendChild(button('Regenerate', 'regen', () => post({regenerate: true})));
+  el.appendChild(actions);
+}
+
+function paint() {
+  frame = 0;
+  const {turns, dead, busy, canRegenerate} = queued;
   const root = document.getElementById('root');
-  root.innerHTML = turns.map(t => t.role === 'user'
-    ? `<div class="q">${esc(t.text)}</div>`
-    : `<div class="a">${t.text ? md(t.text) : ''}</div>`).join('');
-  for (const a of root.querySelectorAll('a')) if (dead.includes(a.getAttribute('href'))) a.classList.add('dead');
+  const atBottom = innerHeight + scrollY >= document.body.scrollHeight - 30;
+  document.body.classList.toggle('noregen', !canRegenerate);
+  while (nodes.length > turns.length) { nodes.pop().remove(); keys.pop(); }
+  turns.forEach((t, i) => {
+    const user = t.role === 'user', last = i === turns.length - 1, key = t.role + '\n' + t.text;
+    if (!nodes[i]) nodes[i] = root.appendChild(document.createElement('div'));
+    const el = nodes[i];
+    if (keys[i] !== key) {
+      keys[i] = key;
+      el.className = user ? 'q' : 'a';
+      if (user) el.textContent = t.text;
+      else if (t.text) { el.innerHTML = md(t.text); decorate(el, t.text); }
+      else el.innerHTML = '';
+    }
+    if (!user) {
+      el.classList.toggle('empty', !t.text);
+      el.classList.toggle('streaming', busy && last);
+      el.classList.toggle('last', last);
+    }
+  });
+  for (const a of root.querySelectorAll('a')) a.classList.toggle('dead', dead.includes(a.getAttribute('href')));
   if (atBottom) scrollTo(0, document.body.scrollHeight);
 }
 </script>

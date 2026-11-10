@@ -42,5 +42,9 @@ for (const scheme of ['javascript:alert(1)', 'JaVaScRiPt:alert(1)', 'data:text/h
   }
 }
 
+check('heading renders as h2', renders('h2', '## Step 1').includes('<h2'));
+check('table renders', renders('tbl', '| a | b |\n|---|---|\n| 1 | 2 |').includes('<table'));
+check('code fence renders as pre', renders('fence', fence + 'swift\nlet x = 1\n' + fence).includes('<pre>'));
+
 console.log(fail === 0 ? 'renderer.check: ok' : 'renderer.check: ' + fail + ' failures');
 process.exit(fail === 0 ? 0 : 1);

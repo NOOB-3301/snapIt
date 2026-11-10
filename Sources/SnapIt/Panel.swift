@@ -1,4 +1,5 @@
 import AppKit
+import ImageIO
 import ServiceManagement
 import SnapItCore
 import SwiftUI
@@ -44,95 +45,186 @@ struct PanelView: View {
         VStack(alignment: .leading, spacing: 10) {
             HStack(spacing: 10) {
                 if panelChibi, let frame = chibi.frame {
-                    Image(decorative: frame, scale: 1).resizable().interpolation(.high).scaledToFit().frame(width: 84, height: 84)
+                    Image(decorative: frame, scale: 1).resizable().interpolation(.high).scaledToFit().frame(width: 64, height: 64)
                 }
                 VStack(alignment: .leading, spacing: 2) {
                     Text("snapIt").font(.headline)
-                    Text(chibi.mood.caption).font(.caption).foregroundStyle(.secondary)
+                    Text(chibi.mood.caption).font(.system(size: 11)).foregroundStyle(.secondary)
                     Text("Claude Code today: \(chibi.tokensToday.formatted(.number.notation(.compactName))) tokens")
-                        .font(.caption2).foregroundStyle(.secondary)
+                        .font(.system(size: 11)).foregroundStyle(.secondary)
                 }
+                Spacer(minLength: 0)
+                Button { showSettings.toggle() } label: { Image(systemName: "gearshape") }
+                    .buttonStyle(IconStyle()).help("Settings").accessibilityLabel("Settings")
+                Button { NSApp.terminate(nil) } label: { Image(systemName: "power") }
+                    .buttonStyle(IconStyle()).help("Quit snapIt").accessibilityLabel("Quit snapIt")
             }
             Button { SnapController.shared.begin() } label: {
-                Label("Snap the screen   ⌃⌥S", systemImage: "viewfinder").frame(maxWidth: .infinity)
-            }.controlSize(.large)
+                HStack {
+                    Label("Snap the screen", systemImage: "viewfinder")
+                    Spacer()
+                    Text("⌃⌥S").font(.system(size: 11, design: .monospaced)).opacity(0.7)
+                }.frame(maxWidth: .infinity)
+            }.buttonStyle(.borderedProminent).controlSize(.large)
             if EnginePool.shared.cli == nil {
-                Text("Claude Code was not found, so answers are off. Install it and log in.").font(.caption).foregroundStyle(.red)
+                Label("Claude Code was not found, so answers are off. Install it and log in.", systemImage: "exclamationmark.triangle.fill")
+                    .font(.system(size: 11)).foregroundStyle(.red)
+                    .padding(Theme.s2).frame(maxWidth: .infinity, alignment: .leading)
+                    .background(Color.red.opacity(0.15), in: RoundedRectangle(cornerRadius: Theme.rCard))
             }
-            Picker("", selection: $state.tab) {
-                ForEach(PanelState.Tab.allCases) { Text($0.rawValue).tag($0) }
-            }.pickerStyle(.segmented).labelsHidden()
-            switch state.tab {
-            case .convert: ConvertView()
-            case .ask: AskFilesView()
-            case .history: HistoryView()
+            if showSettings {
+                HStack {
+                    Text("Settings").font(.system(size: 13, weight: .semibold))
+                    Spacer()
+                    Button("Done") { showSettings = false }.buttonStyle(ChipStyle())
+                }
+                ScrollView { settings }.frame(maxHeight: 360)
+            } else {
+                Picker("", selection: $state.tab) {
+                    ForEach(PanelState.Tab.allCases) { Text($0.rawValue).tag($0) }
+                }.pickerStyle(.segmented).labelsHidden()
+                switch state.tab {
+                case .convert: ConvertView()
+                case .ask: AskFilesView()
+                case .history: HistoryView()
+                }
             }
-            Divider()
-            DisclosureGroup("Settings", isExpanded: $showSettings) { settings }
-            HStack { Spacer(); Button("Quit snapIt") { NSApp.terminate(nil) } }
         }
         .padding(12)
         .frame(width: 350)
         .background(Button("") { AppDelegate.shared.closePopover() }.keyboardShortcut(.cancelAction).opacity(0))
     }
 
+    private func caption(_ text: String) -> some View {
+        Text(text.uppercased()).font(.system(size: 11, weight: .semibold)).foregroundStyle(.secondary)
+            .gridCellColumns(2).frame(maxWidth: .infinity, alignment: .leading).padding(.top, 6)
+    }
+
+    private func row<C: View>(_ label: String, @ViewBuilder _ content: () -> C) -> some View {
+        GridRow {
+            Text(label).font(.system(size: 12)).foregroundStyle(.secondary).gridColumnAlignment(.trailing)
+            content().frame(maxWidth: .infinity, alignment: .leading)
+        }
+    }
+
     private var settings: some View {
-        VStack(alignment: .leading, spacing: 6) {
-            Toggle("Animate notch icon", isOn: $menubarAnimated)
-            Toggle("Show chibi in this panel", isOn: $panelChibi)
-            Toggle("Show chibi on desktop", isOn: $desktopChibi)
-            if desktopChibi { HStack { Text("Size"); Slider(value: $chibiSize, in: 80...260) } }
-            Toggle("Send recognised text with snaps", isOn: $sendText)
-            Toggle("Send browser page URL with snaps", isOn: $sendURL)
-            HStack { Text("Shop in"); TextField("Region", text: $region); TextField("Currency", text: $currency).frame(width: 60) }
-            Picker("Model", selection: $model) {
-                Text("Claude Code default").tag(""); Text("Opus").tag("opus"); Text("Sonnet").tag("sonnet"); Text("Haiku (fastest)").tag("haiku")
+        Grid(alignment: .leadingFirstTextBaseline, horizontalSpacing: 10, verticalSpacing: 8) {
+            caption("Chibi")
+            row("Notch icon") { Toggle("Animate", isOn: $menubarAnimated) }
+            row("In panel") { Toggle("Show", isOn: $panelChibi) }
+            row("On desktop") { Toggle("Show", isOn: $desktopChibi) }
+            if desktopChibi { row("Size") { Slider(value: $chibiSize, in: 80...260) } }
+            caption("Snaps")
+            row("Recognised text") { Toggle("Send with snaps", isOn: $sendText) }
+            row("Page URL") { Toggle("Send with snaps", isOn: $sendURL) }
+            row("Keep history") { HStack { TextField("", value: $historyDays, format: .number).frame(width: 50); Text("days (0 = forever)").font(.system(size: 11)).foregroundStyle(.secondary) } }
+            caption("Claude")
+            row("Model") {
+                Picker("", selection: $model) {
+                    Text("Claude Code default").tag(""); Text("Opus").tag("opus"); Text("Sonnet").tag("sonnet"); Text("Haiku (fastest)").tag("haiku")
+                }.labelsHidden()
             }
-            HStack { Text("Tired above"); TextField("", value: $tiredTokens, format: .number).frame(width: 90); Text("tokens/day") }
-            HStack { Text("Keep history"); TextField("", value: $historyDays, format: .number).frame(width: 50); Text("days (0 = forever)") }
-            HStack {
-                Text("Save to"); TextField("next to the original", text: $outputFolder)
-                Button("Choose…") {
-                    let picker = NSOpenPanel()
-                    picker.canChooseDirectories = true
-                    picker.canChooseFiles = false
-                    NSApp.activate(ignoringOtherApps: true)
-                    if picker.runModal() == .OK, let url = picker.url { outputFolder = url.path }
-                    AppDelegate.shared.showPopover()
+            row("Shop in") { HStack { TextField("Region", text: $region); TextField("Currency", text: $currency).frame(width: 60) } }
+            row("Tired above") { HStack { TextField("", value: $tiredTokens, format: .number).frame(width: 90); Text("tokens/day").font(.system(size: 11)).foregroundStyle(.secondary) } }
+            caption("Files")
+            row("Save to") {
+                HStack {
+                    TextField("next to the original", text: $outputFolder)
+                    Button("Choose…") {
+                        let picker = NSOpenPanel()
+                        picker.canChooseDirectories = true
+                        picker.canChooseFiles = false
+                        NSApp.activate(ignoringOtherApps: true)
+                        if picker.runModal() == .OK, let url = picker.url { outputFolder = url.path }
+                        AppDelegate.shared.showPopover()
+                    }
                 }
             }
-            Toggle("Launch at login", isOn: $launchAtLogin).onChange(of: launchAtLogin) { _, on in
-                do { if on { try SMAppService.mainApp.register() } else { try SMAppService.mainApp.unregister() } }
-                catch { Log.write("launch at login: \(error.localizedDescription)"); launchAtLogin = SMAppService.mainApp.status == .enabled }
+            caption("General")
+            row("Startup") {
+                Toggle("Launch at login", isOn: $launchAtLogin).onChange(of: launchAtLogin) { _, on in
+                    do { if on { try SMAppService.mainApp.register() } else { try SMAppService.mainApp.unregister() } }
+                    catch { Log.write("launch at login: \(error.localizedDescription)"); launchAtLogin = SMAppService.mainApp.status == .enabled }
+                }
             }
-        }.font(.callout).padding(.top, 4)
+        }
+        .toggleStyle(.switch).controlSize(.mini).font(.system(size: 12))
+        .padding(.top, 4)
     }
 }
 
-/// A dashed box that takes dropped files or opens a file picker on click.
+/// A dashed box that takes dropped files or opens a file picker on click; staged files show as removable chips.
 private struct DropZone: View {
     let files: [URL]
     let stage: ([URL]) -> Void
+    let remove: (URL) -> Void
+    @State private var targeted = false
 
     var body: some View {
-        Text(files.isEmpty ? "Drop files here, or click to choose"
-             : "\(files.count) file\(files.count == 1 ? "" : "s"): " + files.prefix(3).map(\.lastPathComponent).joined(separator: ", ") + (files.count > 3 ? "…" : ""))
-            .font(.callout).foregroundStyle(.secondary).multilineTextAlignment(.center)
-            .frame(maxWidth: .infinity, minHeight: 50).padding(6)
-            .background(RoundedRectangle(cornerRadius: 8).strokeBorder(style: StrokeStyle(lineWidth: 1, dash: [5])).foregroundStyle(.secondary))
-            .contentShape(Rectangle())
-            .onTapGesture {
-                let picker = NSOpenPanel()
-                picker.allowsMultipleSelection = true
-                picker.canChooseDirectories = false
-                NSApp.activate(ignoringOtherApps: true)
-                if picker.runModal() == .OK { stage(picker.urls) }
-                AppDelegate.shared.showPopover()
+        VStack(spacing: 6) {
+            if files.isEmpty {
+                Image(systemName: "arrow.down.doc").font(.system(size: 16))
+                Text("Drop files here, or click to choose").font(.system(size: 12))
+            } else {
+                FlowLayout(spacing: 6) {
+                    ForEach(files, id: \.self) { url in
+                        HStack(spacing: 4) {
+                            Text(url.lastPathComponent).lineLimit(1).truncationMode(.middle).frame(maxWidth: 140)
+                            Button { remove(url) } label: { Image(systemName: "xmark") }
+                                .buttonStyle(.plain).help("Remove").accessibilityLabel("Remove \(url.lastPathComponent)")
+                        }
+                        .font(.system(size: 12, weight: .medium)).padding(.horizontal, 10).padding(.vertical, 5)
+                        .background(.quaternary.opacity(0.6), in: Capsule())
+                    }
+                }
             }
-            .onDrop(of: [.fileURL], isTargeted: nil) { providers in
-                loadFileURLs(providers, then: stage)
-                return true
-            }
+        }
+        .foregroundStyle(targeted ? Color.accentColor : .secondary)
+        .frame(maxWidth: .infinity, minHeight: 56).padding(6)
+        .background(RoundedRectangle(cornerRadius: Theme.rCard).fill(Color.accentColor.opacity(targeted ? 0.12 : 0)))
+        .overlay(RoundedRectangle(cornerRadius: Theme.rCard).strokeBorder(style: StrokeStyle(lineWidth: 1, dash: [5]))
+            .foregroundStyle(targeted ? Color.accentColor : .secondary))
+        .contentShape(Rectangle())
+        .onTapGesture {
+            let picker = NSOpenPanel()
+            picker.allowsMultipleSelection = true
+            picker.canChooseDirectories = false
+            NSApp.activate(ignoringOtherApps: true)
+            if picker.runModal() == .OK { stage(picker.urls) }
+            AppDelegate.shared.showPopover()
+        }
+        .onDrop(of: [.fileURL], isTargeted: $targeted) { providers in
+            loadFileURLs(providers, then: stage)
+            return true
+        }
+        .animation(.easeOut(duration: 0.15), value: targeted)
+    }
+}
+
+/// Wraps children onto new lines when the row is full.
+private struct FlowLayout: Layout {
+    var spacing: CGFloat = 6
+
+    func sizeThatFits(proposal: ProposedViewSize, subviews: Subviews, cache: inout ()) -> CGSize {
+        arrange(subviews, width: proposal.width ?? 300).size
+    }
+
+    func placeSubviews(in bounds: CGRect, proposal: ProposedViewSize, subviews: Subviews, cache: inout ()) {
+        let placed = arrange(subviews, width: bounds.width)
+        for (subview, origin) in zip(subviews, placed.origins) {
+            subview.place(at: CGPoint(x: bounds.minX + origin.x, y: bounds.minY + origin.y), proposal: .unspecified)
+        }
+    }
+
+    private func arrange(_ subviews: Subviews, width: CGFloat) -> (origins: [CGPoint], size: CGSize) {
+        var origins: [CGPoint] = [], x: CGFloat = 0, y: CGFloat = 0, rowHeight: CGFloat = 0, maxX: CGFloat = 0
+        for subview in subviews {
+            let size = subview.sizeThatFits(.unspecified)
+            if x > 0, x + size.width > width { x = 0; y += rowHeight + spacing; rowHeight = 0 }
+            origins.append(CGPoint(x: x, y: y))
+            x += size.width + spacing; rowHeight = max(rowHeight, size.height); maxX = max(maxX, x - spacing)
+        }
+        return (origins, CGSize(width: maxX, height: y + rowHeight))
     }
 }
 
@@ -146,33 +238,47 @@ private struct ConvertView: View {
                 ForEach(ConvertModel.Tool.allCases) { Text($0.title).tag($0) }
             }
             options
-            DropZone(files: model.staged) { model.stage($0) }
+            DropZone(files: model.staged, stage: { model.stage($0) }, remove: { url in model.staged.removeAll { $0 == url } })
             HStack {
                 if model.running { Button("Cancel") { model.cancel() }; ProgressView(value: model.progress) }
                 else {
-                    Button("Convert") { model.run() }.disabled(model.staged.isEmpty)
+                    Button("Convert") { model.run() }.buttonStyle(.borderedProminent).disabled(model.staged.isEmpty)
                     Button("Clear") { model.clear() }.disabled(model.staged.isEmpty && model.jobs.isEmpty)
                 }
             }
             if !model.jobs.isEmpty {
                 ScrollView {
                     VStack(alignment: .leading, spacing: 4) {
-                        ForEach(model.jobs) { job in
-                            HStack {
-                                Text(line(job)).font(.caption).foregroundStyle(job.error == nil ? Color.secondary : Color.red).textSelection(.enabled)
-                                Spacer()
-                                if let first = job.outputs.first { Button("Show") { model.reveal(first) }.controlSize(.small) }
-                            }
-                        }
+                        ForEach(model.jobs) { job in jobRow(job) }
                     }
                 }.frame(maxHeight: 110)
             }
         }
     }
 
-    private func line(_ job: ConvertModel.Job) -> String {
-        if let error = job.error { return "\(job.input.lastPathComponent): \(error)" }
-        return "\(job.input.lastPathComponent)  ·  \(sizes.string(fromByteCount: Int64(job.before))) → \(sizes.string(fromByteCount: Int64(job.after)))"
+    @ViewBuilder private func jobRow(_ job: ConvertModel.Job) -> some View {
+        HStack(spacing: 6) {
+            if let error = job.error {
+                Image(systemName: "exclamationmark.triangle.fill").foregroundStyle(.red)
+                Text("\(job.input.lastPathComponent): \(error)").font(.system(size: 11)).foregroundStyle(.red).textSelection(.enabled)
+                Spacer(minLength: 0)
+            } else {
+                Image(nsImage: NSWorkspace.shared.icon(forFile: job.input.path)).resizable().frame(width: 16, height: 16)
+                Text(job.input.lastPathComponent).font(.system(size: 12)).lineLimit(1).truncationMode(.middle)
+                Spacer(minLength: 4)
+                Text(saving(job)).font(.system(size: 11).monospacedDigit()).foregroundStyle(.secondary).lineLimit(1)
+                if let first = job.outputs.first {
+                    Button { model.reveal(first) } label: { Image(systemName: "magnifyingglass") }
+                        .buttonStyle(IconStyle()).help("Show in Finder").accessibilityLabel("Show in Finder")
+                }
+            }
+        }
+    }
+
+    private func saving(_ job: ConvertModel.Job) -> String {
+        var text = "\(sizes.string(fromByteCount: Int64(job.before))) → \(sizes.string(fromByteCount: Int64(job.after)))"
+        if job.before > 0, job.after < job.before { text += "  −\(100 - job.after * 100 / job.before)%" }
+        return text
     }
 
     @ViewBuilder private var options: some View {
@@ -209,7 +315,7 @@ private struct AskFilesView: View {
         VStack(alignment: .leading, spacing: 8) {
             Text("For anything the tools above cannot do, like PDF to Excel. Claude works on copies; results land next to your files.")
                 .font(.caption).foregroundStyle(.secondary)
-            DropZone(files: model.files) { model.stage($0) }
+            DropZone(files: model.files, stage: { model.stage($0) }, remove: { url in model.files.removeAll { $0 == url } })
             HStack {
                 TextField("What should be done with them?", text: $model.instruction).textFieldStyle(.roundedBorder).onSubmit { model.send() }
                 if model.running { Button("Stop") { model.cancel() } }
@@ -224,7 +330,7 @@ private struct AskFilesView: View {
                     Text(model.status).font(.caption).foregroundStyle(.secondary).textSelection(.enabled)
                 }
             }
-            if !model.turns.isEmpty { AnswerView(turns: model.turns).frame(height: 150) }
+            if !model.turns.isEmpty { AnswerView(turns: model.turns, busy: model.running, canRegenerate: false).frame(height: 150) }
         }
     }
 }
@@ -232,34 +338,82 @@ private struct AskFilesView: View {
 private struct HistoryView: View {
     @ObservedObject private var store = HistoryStore.shared
     @State private var query = ""
-    private static let dates: DateFormatter = { let f = DateFormatter(); f.dateStyle = .short; f.timeStyle = .short; return f }()
+    @State private var confirmClear = false
 
     var body: some View {
         VStack(alignment: .leading, spacing: 8) {
             HStack {
                 TextField("Search snaps", text: $query).textFieldStyle(.roundedBorder)
-                Button("Clear all") { store.clearAll() }.disabled(store.items.isEmpty)
+                Button(confirmClear ? "Delete all \(store.items.count) snaps?" : "Clear all") {
+                    if confirmClear { store.clearAll(); confirmClear = false }
+                    else {
+                        confirmClear = true
+                        // A dialog would need the app active; the notch panel is non-activating, so the button itself asks.
+                        DispatchQueue.main.asyncAfter(deadline: .now() + 3) { confirmClear = false }
+                    }
+                }
+                .foregroundStyle(confirmClear ? Color.red : .primary).disabled(store.items.isEmpty)
             }
             let records = store.matching(query)
             if records.isEmpty {
-                Text(store.items.isEmpty ? "No snaps yet. Press ⌃⌥S over anything." : "Nothing matches.").font(.caption).foregroundStyle(.secondary)
+                VStack(spacing: 6) {
+                    Image(systemName: "viewfinder").font(.system(size: 20))
+                    Text(store.items.isEmpty ? "No snaps yet. Press ⌃⌥S over anything." : "Nothing matches.").font(.caption)
+                }.foregroundStyle(.secondary).frame(maxWidth: .infinity).padding(.vertical, Theme.s3)
             } else {
                 ScrollView {
                     VStack(alignment: .leading, spacing: 2) {
-                        ForEach(records) { record in
-                            HStack {
-                                Button { SnapController.shared.reopen(record) } label: {
-                                    VStack(alignment: .leading) {
-                                        Text(record.title).lineLimit(1)
-                                        Text(Self.dates.string(from: record.date)).font(.caption2).foregroundStyle(.secondary)
-                                    }.frame(maxWidth: .infinity, alignment: .leading).contentShape(Rectangle())
-                                }.buttonStyle(.plain)
-                                Button { store.delete(record) } label: { Image(systemName: "trash") }.buttonStyle(.borderless)
-                            }
-                        }
+                        ForEach(records) { record in HistoryRow(record: record, store: store) }
                     }
                 }.frame(maxHeight: 200)
             }
         }
+    }
+}
+
+private struct HistoryRow: View {
+    let record: SnapRecord
+    let store: HistoryStore
+    @State private var hover = false
+    @State private var thumb: NSImage?
+    private static let cache = NSCache<NSString, NSImage>()
+
+    var body: some View {
+        HStack(spacing: 8) {
+            Button { SnapController.shared.reopen(record) } label: {
+                HStack(spacing: 8) {
+                    Group {
+                        if let thumb { Image(nsImage: thumb).resizable().aspectRatio(contentMode: .fill) }
+                        else { Color.gray.opacity(0.2) }
+                    }
+                    .frame(width: 36, height: 36).clipShape(RoundedRectangle(cornerRadius: Theme.rSmall))
+                    VStack(alignment: .leading, spacing: 1) {
+                        Text(record.title).font(.system(size: 13)).lineLimit(1)
+                        Text(record.date.formatted(.relative(presentation: .named))).font(.system(size: 11)).foregroundStyle(.secondary)
+                    }
+                    Spacer(minLength: 0)
+                }.contentShape(Rectangle())
+            }.buttonStyle(.plain)
+            Button { store.delete(record) } label: { Image(systemName: "trash") }
+                .buttonStyle(IconStyle()).opacity(hover ? 1 : 0).help("Delete").accessibilityLabel("Delete")
+        }
+        .padding(.horizontal, 4).padding(.vertical, 2)
+        .background(.quaternary.opacity(hover ? 0.5 : 0), in: RoundedRectangle(cornerRadius: Theme.rSmall))
+        .onHover { hover = $0 }
+        .task(id: record.id) {
+            let key = record.id.uuidString as NSString
+            if let cached = Self.cache.object(forKey: key) { thumb = cached; return }
+            guard let data = store.imagePNG(record) else { return }
+            let image = await Task.detached(priority: .utility) { Self.downscale(data) }.value
+            if let image { Self.cache.setObject(image, forKey: key); thumb = image }
+        }
+    }
+
+    private nonisolated static func downscale(_ data: Data) -> NSImage? {
+        guard let source = CGImageSourceCreateWithData(data as CFData, nil),
+              let cg = CGImageSourceCreateThumbnailAtIndex(source, 0, [
+                kCGImageSourceCreateThumbnailFromImageAlways: true, kCGImageSourceThumbnailMaxPixelSize: 72,
+                kCGImageSourceCreateThumbnailWithTransform: true] as CFDictionary) else { return nil }
+        return NSImage(cgImage: cg, size: NSSize(width: cg.width, height: cg.height))
     }
 }

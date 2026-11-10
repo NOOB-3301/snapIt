@@ -6,6 +6,14 @@ import SwiftUI
 enum QuickAction: String, CaseIterable, Identifiable {
     case explain = "Explain", summarise = "Summarise", find = "Find", translate = "Translate"
     var id: String { rawValue }
+    var symbol: String {
+        switch self {
+        case .explain: return "lightbulb"
+        case .summarise: return "list.bullet"
+        case .find: return "magnifyingglass"
+        case .translate: return "character.bubble"
+        }
+    }
     var prompt: String {
         switch self {
         case .explain: return "Explain this clearly. If it is a problem or a derivation, go step by step."
@@ -287,7 +295,7 @@ enum QuickAction: String, CaseIterable, Identifiable {
         self.session = session
         let size = NSSize(width: 460, height: 520)
         panel = NSPanel(contentRect: NSRect(origin: .zero, size: size),
-                        styleMask: [.titled, .closable, .resizable, .utilityWindow, .nonactivatingPanel], backing: .buffered, defer: false)
+                        styleMask: [.titled, .closable, .resizable, .utilityWindow, .nonactivatingPanel, .fullSizeContentView], backing: .buffered, defer: false)
         super.init()
         if let rect {
             let visible = (NSScreen.screens.first { $0.frame.intersects(rect) } ?? NSScreen.main)?.visibleFrame ?? .zero
@@ -300,13 +308,28 @@ enum QuickAction: String, CaseIterable, Identifiable {
             panel.center()
         }
         panel.title = "snapIt"
+        panel.titleVisibility = .hidden
+        panel.titlebarAppearsTransparent = true
+        panel.isMovableByWindowBackground = true
+        panel.standardWindowButton(.miniaturizeButton)?.isHidden = true
+        panel.standardWindowButton(.zoomButton)?.isHidden = true
+        panel.isOpaque = false
+        panel.backgroundColor = .clear
         panel.level = .floating
         panel.hidesOnDeactivate = false
         panel.isReleasedWhenClosed = false
         panel.collectionBehavior = [.canJoinAllSpaces, .fullScreenAuxiliary]
         panel.minSize = NSSize(width: 320, height: 300)
         panel.delegate = self
-        panel.contentView = NSHostingView(rootView: AskView(session: session) { [weak self] in self?.panel.close() })
+        let host = NSHostingView(rootView: AskView(session: session) { [weak self] in self?.panel.close() })
+        host.autoresizingMask = [.width, .height]
+        let material = NSVisualEffectView(frame: NSRect(origin: .zero, size: size))
+        material.material = .popover   // .windowBackground if maths over a busy background reads badly
+        material.blendingMode = .behindWindow
+        material.state = .active
+        host.frame = material.bounds
+        material.addSubview(host)
+        panel.contentView = material
         panel.makeKeyAndOrderFront(nil)
     }
 
@@ -324,45 +347,105 @@ private struct AskView: View {
     @State private var question = ""
     @FocusState private var focused: Bool
 
+    private var thumbnails: [NSImage] { [session.thumbnail] + session.extraThumbnails }
+
     var body: some View {
-        VStack(alignment: .leading, spacing: 8) {
-            HStack(alignment: .top, spacing: 8) {
-                ForEach(Array(([session.thumbnail] + session.extraThumbnails).enumerated()), id: \.offset) { _, image in
-                    Image(nsImage: image).resizable().aspectRatio(contentMode: .fit)
-                        .frame(maxWidth: 110, maxHeight: 54).clipShape(RoundedRectangle(cornerRadius: 4))
+        VStack(spacing: 0) {
+            header
+            Divider()
+            if session.turns.isEmpty { emptyState } else {
+                AnswerView(turns: session.turns, deadLinks: session.deadLinks, busy: session.busy,
+                           onRegenerate: { session.retry() })
+                    .frame(maxWidth: .infinity, maxHeight: .infinity)
+            }
+            statusRow
+            composer
+        }
+        .ignoresSafeArea()
+        .onAppear { focused = true }
+        // Esc stops a running answer first; only an idle panel closes.
+        .background(Button("") { if session.busy { session.stop() } else { close() } }.keyboardShortcut(.cancelAction).opacity(0))
+    }
+
+    private var header: some View {
+        HStack(spacing: 6) {
+            ForEach(Array(thumbnails.prefix(4).enumerated()), id: \.offset) { _, image in Thumb(image: image) }
+            if thumbnails.count > 4 {
+                Text("+\(thumbnails.count - 4)").font(.system(size: 11, weight: .medium)).foregroundStyle(.secondary)
+            }
+            Text(session.contextLine).font(.system(size: 11)).foregroundStyle(.secondary)
+                .lineLimit(1).truncationMode(.middle).help(session.contextLine)
+            Spacer(minLength: 0)
+        }
+        .padding(.leading, 68).padding(.trailing, Theme.s3)
+        .frame(height: 44)
+    }
+
+    private var emptyState: some View {
+        VStack(spacing: Theme.s3) {
+            HStack(spacing: Theme.s2) {
+                ForEach(QuickAction.allCases) { action in
+                    Button { session.ask(action.rawValue, sending: action.prompt) } label: { Label(action.rawValue, systemImage: action.symbol) }
+                        .buttonStyle(ChipStyle())
                 }
-                Text(session.contextLine).font(.caption).foregroundStyle(.secondary).lineLimit(3)
+            }
+            Text("or type a question · Return alone explains").font(.system(size: 11)).foregroundStyle(.secondary)
+        }
+        .frame(maxWidth: .infinity, maxHeight: .infinity)
+    }
+
+    @ViewBuilder private var statusRow: some View {
+        if let error = session.error {
+            HStack(spacing: 6) {
+                Image(systemName: "exclamationmark.triangle.fill").foregroundStyle(.red)
+                Text(error).foregroundStyle(.red).textSelection(.enabled)
+                Spacer()
+                Button("Retry") { session.retry() }.buttonStyle(ChipStyle())
+            }
+            .font(.system(size: 11)).padding(.horizontal, Theme.s3).padding(.vertical, Theme.s1)
+        } else if !session.status.isEmpty, session.status != "Thinking…" {
+            HStack(spacing: 6) {
+                if session.busy { ProgressView().controlSize(.small) }
+                Text(session.status).font(.system(size: 11)).foregroundStyle(.secondary)
                 Spacer()
             }
-            HStack(spacing: 6) {
+            .padding(.horizontal, Theme.s3).padding(.vertical, Theme.s1)
+        }
+    }
+
+    private var composer: some View {
+        HStack(alignment: .bottom, spacing: 6) {
+            Menu {
                 ForEach(QuickAction.allCases) { action in
                     Button(action.rawValue) { session.ask(action.rawValue, sending: action.prompt) }.disabled(session.busy)
                 }
-                Button("Copy text") { copy(session.context.text ?? "") }.disabled(session.context.text == nil)
-            }
-            AnswerView(turns: session.turns, deadLinks: session.deadLinks).frame(minHeight: 100)
-            if let error = session.error {
-                HStack {
-                    Text(error).font(.caption).foregroundStyle(.red).textSelection(.enabled)
-                    Spacer()
-                    Button("Retry") { session.retry() }
-                }
-            } else if !session.status.isEmpty {
-                HStack(spacing: 6) {
-                    if session.busy { ProgressView().controlSize(.small) }
-                    Text(session.status).font(.caption).foregroundStyle(.secondary)
-                }
-            }
-            HStack {
-                TextField(session.turns.isEmpty ? "Ask about this…  (Enter alone = Explain)" : "Ask a follow-up…", text: $question)
-                    .textFieldStyle(.roundedBorder).focused($focused).onSubmit(submit)
-                if session.busy { Button("Stop") { session.stop() } }
-                else { Button("Copy") { copy(session.lastAnswer) }.disabled(session.lastAnswer.isEmpty) }
-            }
+                Divider()
+                Button("Copy recognised text") { copy(session.context.text ?? "") }.disabled(session.context.text == nil)
+            } label: { Image(systemName: "ellipsis.circle") }
+                .menuStyle(.button).buttonStyle(IconStyle()).menuIndicator(.hidden).fixedSize()
+                .help("Quick actions").accessibilityLabel("Quick actions")
+            TextField(session.turns.isEmpty ? "Ask about this…  (Enter alone = Explain)" : "Ask a follow-up…", text: $question, axis: .vertical)
+                .textFieldStyle(.plain).font(.system(size: 13)).lineLimit(1...5)
+                .focused($focused).onSubmit(submit).padding(.vertical, 4)
+            sendButton
         }
+        .padding(6)
+        .background(.quaternary.opacity(0.5), in: RoundedRectangle(cornerRadius: Theme.rComposer))
+        .overlay(RoundedRectangle(cornerRadius: Theme.rComposer).stroke(.separator, lineWidth: 0.5))
         .padding(10)
-        .onAppear { focused = true }
-        .background(Button("") { close() }.keyboardShortcut(.cancelAction).opacity(0))
+    }
+
+    private var sendButton: some View {
+        let empty = question.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+        let dim = !session.busy && empty && !session.turns.isEmpty
+        return Button { if session.busy { session.stop() } else { submit() } } label: {
+            Image(systemName: session.busy ? "stop.fill" : "arrow.up").font(.system(size: 12, weight: .bold))
+                .foregroundStyle(dim ? Color.secondary : Color.white)
+                .frame(width: 26, height: 26)
+                .background(dim ? AnyShapeStyle(.quaternary) : AnyShapeStyle(Color.accentColor), in: Circle())
+        }
+        .buttonStyle(.plain)
+        .help(session.busy ? "Stop" : "Send").accessibilityLabel(session.busy ? "Stop" : "Send")
     }
 
     private func submit() {
@@ -375,5 +458,22 @@ private struct AskView: View {
     private func copy(_ text: String) {
         NSPasteboard.general.clearContents()
         NSPasteboard.general.setString(text, forType: .string)
+    }
+}
+
+/// A 32 pt snap thumbnail that opens a larger preview.
+private struct Thumb: View {
+    let image: NSImage
+    @State private var open = false
+    var body: some View {
+        Button { open = true } label: {
+            Image(nsImage: image).resizable().aspectRatio(contentMode: .fill).frame(width: 32, height: 32)
+                .clipShape(RoundedRectangle(cornerRadius: Theme.rSmall))
+                .overlay(RoundedRectangle(cornerRadius: Theme.rSmall).stroke(.separator, lineWidth: 0.5))
+        }
+        .buttonStyle(.plain).help("Show snap").accessibilityLabel("Show snap")
+        .popover(isPresented: $open) {
+            Image(nsImage: image).resizable().aspectRatio(contentMode: .fit).frame(maxWidth: 480, maxHeight: 360).padding(Theme.s2)
+        }
     }
 }

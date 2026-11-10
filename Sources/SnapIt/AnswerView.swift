@@ -6,18 +6,23 @@ import WebKit
 struct AnswerView: NSViewRepresentable {
     var turns: [Turn]
     var deadLinks: [String] = []
+    var busy = false
+    var canRegenerate = true
+    var onRegenerate: () -> Void = {}
 
     private var script: String {
         let payload: [String: Any] = ["turns": turns.map { ["role": $0.role, "text": $0.text] }, "dead": deadLinks]
         guard let data = try? JSONSerialization.data(withJSONObject: payload),
               let json = String(data: data, encoding: .utf8) else { return "" }
-        return "window.render && render(\(json).turns, \(json).dead)"
+        return "(p => window.render && render(p.turns, p.dead, \(busy), \(canRegenerate)))(\(json))"
     }
 
     func makeCoordinator() -> Coordinator { Coordinator() }
 
     func makeNSView(context: Context) -> WKWebView {
-        let web = WKWebView(frame: .zero, configuration: WKWebViewConfiguration())
+        let config = WKWebViewConfiguration()
+        config.userContentController.add(context.coordinator, name: "snapit")
+        let web = WKWebView(frame: .zero, configuration: config)
         web.navigationDelegate = context.coordinator
         web.setValue(false, forKey: "drawsBackground")
         if let scroll = web.enclosingScrollView {
@@ -26,6 +31,7 @@ struct AnswerView: NSViewRepresentable {
             scroll.horizontalScrollElasticity = .none
         }
         context.coordinator.web = web
+        context.coordinator.onRegenerate = onRegenerate
         context.coordinator.pending = script
         if let dir = Self.webDirectory {
             web.loadFileURL(dir.appendingPathComponent("index.html"), allowingReadAccessTo: dir)
@@ -34,6 +40,7 @@ struct AnswerView: NSViewRepresentable {
     }
 
     func updateNSView(_ web: WKWebView, context: Context) {
+        context.coordinator.onRegenerate = onRegenerate
         context.coordinator.pending = script
         context.coordinator.flush()
     }
@@ -48,8 +55,9 @@ struct AnswerView: NSViewRepresentable {
         return nil
     }
 
-    @MainActor final class Coordinator: NSObject, WKNavigationDelegate {
+    @MainActor final class Coordinator: NSObject, WKNavigationDelegate, WKScriptMessageHandler {
         weak var web: WKWebView?
+        var onRegenerate: () -> Void = {}
         var pending = ""
         private var loaded = false
         private var last = ""
@@ -59,6 +67,17 @@ struct AnswerView: NSViewRepresentable {
             last = pending
             web.evaluateJavaScript(pending) { _, error in
                 if let error { Log.write("answer render failed: \(error.localizedDescription)") }
+            }
+        }
+
+        /// Trust boundary: the page shows text from the web, so only these two messages do anything.
+        func userContentController(_ controller: WKUserContentController, didReceive message: WKScriptMessage) {
+            guard let body = message.body as? [String: Any] else { return }
+            if let text = body["copy"] as? String {
+                NSPasteboard.general.clearContents()
+                NSPasteboard.general.setString(text, forType: .string)
+            } else if body["regenerate"] as? Bool == true {
+                onRegenerate()
             }
         }
 

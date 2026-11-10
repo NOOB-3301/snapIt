@@ -87,6 +87,8 @@ private final class OverlayView: NSView {
     var onSelect: ((CGImage, NSRect) -> Void)?
     var onCancel: (() -> Void)?
     private let dim = CAShapeLayer(), outline = CAShapeLayer()
+    private let hint = CALayer(), badge = CALayer()
+    private let text = CATextLayer(), badgeText = CATextLayer()
     private var start: NSPoint?
 
     init(frame: NSRect, image: CGImage) {
@@ -97,22 +99,23 @@ private final class OverlayView: NSView {
         layer = root
         wantsLayer = true
         dim.fillRule = .evenOdd
-        dim.fillColor = NSColor.black.withAlphaComponent(0.35).cgColor
+        dim.fillColor = NSColor.black.withAlphaComponent(0.45).cgColor
         outline.fillColor = nil
         outline.strokeColor = NSColor.white.cgColor
-        outline.lineWidth = 1.5
+        outline.lineWidth = 1
+        outline.shadowColor = NSColor.black.cgColor
+        outline.shadowOpacity = 0.6
+        outline.shadowRadius = 3
+        outline.shadowOffset = .zero
         root.addSublayer(dim)
         root.addSublayer(outline)
-        let hint = CATextLayer()
-        hint.string = "Drag to select  ·  Enter for whole screen  ·  Esc to cancel"
-        hint.fontSize = 13
-        hint.alignmentMode = .center
-        hint.foregroundColor = NSColor.white.cgColor
-        hint.backgroundColor = NSColor.black.withAlphaComponent(0.6).cgColor
-        hint.cornerRadius = 6
-        hint.contentsScale = 2
-        hint.frame = CGRect(x: frame.width / 2 - 210, y: frame.height - 70, width: 420, height: 20)
+        let hintWidth: CGFloat = 400
+        hint.frame = CGRect(x: frame.width / 2 - hintWidth / 2, y: frame.height - 70, width: hintWidth, height: 26)
+        Self.style(hint, text, "Drag to select  ·  Enter for whole screen  ·  Esc to cancel")
+        badge.isHidden = true
         root.addSublayer(hint)
+        Self.style(badge, badgeText, "")
+        root.addSublayer(badge)
         show(nil)
     }
     required init?(coder: NSCoder) { fatalError() }
@@ -120,6 +123,21 @@ private final class OverlayView: NSView {
     override var acceptsFirstResponder: Bool { true }
     override func acceptsFirstMouse(for event: NSEvent?) -> Bool { true }
     override func resetCursorRects() { addCursorRect(bounds, cursor: .crosshair) }
+
+    /// A pill with its text centred vertically; CATextLayer cannot do that by itself.
+    private static func style(_ pill: CALayer, _ label: CATextLayer, _ string: String) {
+        pill.backgroundColor = NSColor.black.withAlphaComponent(0.6).cgColor
+        pill.cornerRadius = 13
+        label.string = string
+        label.fontSize = 12
+        label.font = NSFont.systemFont(ofSize: 12, weight: .medium)
+        label.alignmentMode = .center
+        label.foregroundColor = NSColor.white.cgColor
+        label.contentsScale = 2
+        label.frame = CGRect(x: 0, y: 5, width: pill.bounds.width, height: 16)
+        label.autoresizingMask = [.layerWidthSizable]
+        if label.superlayer == nil { pill.addSublayer(label) }
+    }
 
     private func show(_ selection: NSRect?) {
         CATransaction.begin()
@@ -129,6 +147,15 @@ private final class OverlayView: NSView {
         if let selection { path.addRect(selection) }
         dim.path = path
         outline.path = selection.map { CGPath(rect: $0, transform: nil) }
+        if let selection {
+            let scale = CGFloat(image.width) / bounds.width
+            badgeText.string = "\(Int((selection.width * scale).rounded())) × \(Int((selection.height * scale).rounded()))"
+            let width: CGFloat = 96
+            badge.frame = CGRect(x: min(max(selection.maxX - width, 4), bounds.width - width - 4),
+                                 y: max(selection.minY - 34, 4), width: width, height: 26)
+            badgeText.frame = CGRect(x: 0, y: 5, width: width, height: 16)
+            badge.isHidden = false
+        } else { badge.isHidden = true }
         CATransaction.commit()
     }
 
