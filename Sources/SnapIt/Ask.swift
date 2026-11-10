@@ -104,6 +104,16 @@ enum QuickAction: String, CaseIterable, Identifiable {
         return parts.filter { !$0.isEmpty }.joined(separator: "  ·  ")
     }
 
+    /// Drops the Claude process so the next question starts a new one with the current servers.
+    func refresh() {
+        guard !busy else { return }
+        engine?.cancel()
+        engine = nil
+        unsent = []
+        EnginePool.shared.refresh()
+        status = "Session restarted"
+    }
+
     /// A later snap joins this conversation; it goes out with the next question. History keeps only the first snap.
     func add(image: CGImage) {
         let data = SnapSession.encode(image)
@@ -376,6 +386,9 @@ private struct AskView: View {
             Text(session.contextLine).font(.system(size: 11)).foregroundStyle(.secondary)
                 .lineLimit(1).truncationMode(.middle).help(session.contextLine)
             Spacer(minLength: 0)
+            Button { session.refresh() } label: { Image(systemName: "arrow.clockwise") }
+                .buttonStyle(IconStyle()).disabled(session.busy)
+                .help("Restart Claude session and reload ~/.claude.json").accessibilityLabel("Restart Claude session")
         }
         .padding(.leading, 68).padding(.trailing, Theme.s3)
         .frame(height: 44)
@@ -424,6 +437,7 @@ private struct AskView: View {
             } label: { Image(systemName: "ellipsis.circle") }
                 .menuStyle(.button).buttonStyle(IconStyle()).menuIndicator(.hidden).fixedSize()
                 .help("Quick actions").accessibilityLabel("Quick actions")
+            McpMenu(onChange: { session.refresh() }, disabled: session.busy)
             TextField(session.turns.isEmpty ? "Ask about this…  (Enter alone = Explain)" : "Ask a follow-up…", text: $question, axis: .vertical)
                 .textFieldStyle(.plain).font(.system(size: 13)).lineLimit(1...5)
                 .focused($focused).onSubmit(submit).padding(.vertical, 4)

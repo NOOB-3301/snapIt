@@ -166,17 +166,7 @@ private struct DropZone: View {
                 Image(systemName: "arrow.down.doc").font(.system(size: 16))
                 Text("Drop files here, or click to choose").font(.system(size: 12))
             } else {
-                FlowLayout(spacing: 6) {
-                    ForEach(files, id: \.self) { url in
-                        HStack(spacing: 4) {
-                            Text(url.lastPathComponent).lineLimit(1).truncationMode(.middle).frame(maxWidth: 140)
-                            Button { remove(url) } label: { Image(systemName: "xmark") }
-                                .buttonStyle(.plain).help("Remove").accessibilityLabel("Remove \(url.lastPathComponent)")
-                        }
-                        .font(.system(size: 12, weight: .medium)).padding(.horizontal, 10).padding(.vertical, 5)
-                        .background(.quaternary.opacity(0.6), in: Capsule())
-                    }
-                }
+                FileChips(files: files, remove: remove)
             }
         }
         .foregroundStyle(targeted ? Color.accentColor : .secondary)
@@ -198,6 +188,26 @@ private struct DropZone: View {
             return true
         }
         .animation(.easeOut(duration: 0.15), value: targeted)
+    }
+}
+
+/// Removable chips, one per staged file.
+private struct FileChips: View {
+    let files: [URL]
+    let remove: (URL) -> Void
+
+    var body: some View {
+        FlowLayout(spacing: 6) {
+            ForEach(files, id: \.self) { url in
+                HStack(spacing: 4) {
+                    Text(url.lastPathComponent).lineLimit(1).truncationMode(.middle).frame(maxWidth: 140)
+                    Button { remove(url) } label: { Image(systemName: "xmark") }
+                        .buttonStyle(.plain).help("Remove").accessibilityLabel("Remove \(url.lastPathComponent)")
+                }
+                .font(.system(size: 12, weight: .medium)).padding(.horizontal, 10).padding(.vertical, 5)
+                .background(.quaternary.opacity(0.6), in: Capsule())
+            }
+        }
     }
 }
 
@@ -310,28 +320,70 @@ private struct ConvertView: View {
 
 private struct AskFilesView: View {
     @ObservedObject private var model = AskFilesModel.shared
+    @State private var targeted = false
+    private let examples = ["Find the largest files in Downloads", "Summarise the PDF I attach", "Tidy the screenshots on my Desktop"]
 
     var body: some View {
         VStack(alignment: .leading, spacing: 8) {
-            Text("For anything the tools above cannot do, like PDF to Excel. Claude works on copies; results land next to your files.")
-                .font(.caption).foregroundStyle(.secondary)
-            DropZone(files: model.files, stage: { model.stage($0) }, remove: { url in model.files.removeAll { $0 == url } })
             HStack {
-                TextField("What should be done with them?", text: $model.instruction).textFieldStyle(.roundedBorder).onSubmit { model.send() }
-                if model.running { Button("Stop") { model.cancel() } }
-                else {
-                    Button("Go") { model.send() }
-                    Button("Clear") { model.files = []; model.turns = []; model.status = "" }.disabled(model.files.isEmpty && model.turns.isEmpty)
-                }
+                Text("Ask Claude to do anything on this Mac. It works on your real files.").font(.system(size: 11)).foregroundStyle(.secondary)
+                Spacer(minLength: 0)
+                Button { model.reset() } label: { Image(systemName: "arrow.counterclockwise") }
+                    .buttonStyle(IconStyle()).disabled(model.turns.isEmpty && model.files.isEmpty)
+                    .help("New chat (also reloads ~/.claude.json)").accessibilityLabel("New chat")
             }
+            Group {
+                if model.turns.isEmpty {
+                    VStack(spacing: 6) {
+                        ForEach(examples, id: \.self) { example in
+                            Button(example) { model.instruction = example }.buttonStyle(ChipStyle())
+                        }
+                    }.frame(maxWidth: .infinity, maxHeight: .infinity)
+                } else {
+                    AnswerView(turns: model.turns, busy: model.running, canRegenerate: false)
+                }
+            }.frame(height: 260)
             if !model.status.isEmpty {
                 HStack(spacing: 6) {
                     if model.running { ProgressView().controlSize(.small) }
                     Text(model.status).font(.caption).foregroundStyle(.secondary).textSelection(.enabled)
                 }
             }
-            if !model.turns.isEmpty { AnswerView(turns: model.turns, busy: model.running, canRegenerate: false).frame(height: 150) }
+            if !model.files.isEmpty { FileChips(files: model.files) { url in model.files.removeAll { $0 == url } } }
+            composer
         }
+        .padding(4)
+        .overlay(RoundedRectangle(cornerRadius: Theme.rCard).stroke(Color.accentColor, lineWidth: targeted ? 1.5 : 0))
+        .onDrop(of: [.fileURL], isTargeted: $targeted) { providers in
+            loadFileURLs(providers) { model.stage($0) }
+            return true
+        }
+    }
+
+    private var composer: some View {
+        HStack(alignment: .bottom, spacing: 6) {
+            Button {
+                let picker = NSOpenPanel()
+                picker.allowsMultipleSelection = true
+                picker.canChooseDirectories = false
+                NSApp.activate(ignoringOtherApps: true)
+                if picker.runModal() == .OK { model.stage(picker.urls) }
+                AppDelegate.shared.showPopover()
+            } label: { Image(systemName: "paperclip") }
+                .buttonStyle(IconStyle()).help("Attach files").accessibilityLabel("Attach files")
+            McpMenu(onChange: { model.restartEngine() }, disabled: model.running)
+            TextField("Ask Claude…", text: $model.instruction, axis: .vertical)
+                .textFieldStyle(.plain).font(.system(size: 13)).lineLimit(1...4)
+                .onSubmit { model.send() }.padding(.vertical, 4)
+            Button { if model.running { model.cancel() } else { model.send() } } label: {
+                Image(systemName: model.running ? "stop.fill" : "arrow.up").font(.system(size: 12, weight: .bold))
+                    .foregroundStyle(Color.white).frame(width: 26, height: 26).background(Color.accentColor, in: Circle())
+            }
+            .buttonStyle(.plain).help(model.running ? "Stop" : "Send").accessibilityLabel(model.running ? "Stop" : "Send")
+        }
+        .padding(6)
+        .background(.quaternary.opacity(0.5), in: RoundedRectangle(cornerRadius: Theme.rComposer))
+        .overlay(RoundedRectangle(cornerRadius: Theme.rComposer).stroke(.separator, lineWidth: 0.5))
     }
 }
 

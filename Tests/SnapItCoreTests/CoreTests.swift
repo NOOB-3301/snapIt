@@ -223,3 +223,49 @@ func liveEngineAnswersAboutAnImageAndRemembers() async throws {
     #expect(second.0.contains("RED"))
     session.cancel()
 }
+
+@Test func mcpServerNamesAndConfig() throws {
+    let json = Data(#"{"mcpServers":{"zeta":{"command":"z"},"alpha":{"command":"a"},"mid":{"url":"https://m"}},"projects":{}}"#.utf8)
+    #expect(Mcp.serverNames(in: json) == ["alpha", "mid", "zeta"])
+    #expect(Mcp.serverNames(in: Data("nope".utf8)).isEmpty)
+    #expect(Mcp.serverNames(in: Data("{}".utf8)).isEmpty)
+
+    let made = try #require(Mcp.config(from: json, selected: ["alpha", "gone"]))
+    #expect(made.names == ["alpha"])
+    let servers = try #require(((try JSONSerialization.jsonObject(with: made.data)) as? [String: Any])?["mcpServers"] as? [String: Any])
+    #expect(Array(servers.keys) == ["alpha"])
+    #expect(Mcp.config(from: json, selected: []) == nil)
+    #expect(Mcp.config(from: json, selected: ["gone"]) == nil)
+}
+
+@Test func engineArguments() {
+    // The snap route's list as it was before EngineOptions existed.
+    let before = ["-p", "--input-format", "stream-json", "--output-format", "stream-json",
+                  "--include-partial-messages", "--verbose", "--strict-mcp-config", "--setting-sources", "",
+                  "--disable-slash-commands", "--no-session-persistence",
+                  "--tools", "WebSearch,WebFetch", "--allowedTools", "WebSearch,WebFetch",
+                  "--system-prompt", "sys", "--model", "haiku"]
+    #expect(ClaudeSession.arguments(model: "haiku", systemPrompt: "sys", options: EngineOptions()) == before)
+
+    var options = EngineOptions()
+    options.tools = ["Read", "Bash"]
+    options.mcpConfig = URL(fileURLWithPath: "/tmp/mcp.json")
+    options.mcpServers = ["a", "b"]
+    options.restricted = true
+    options.disallowed = ["Bash(sudo *)"]
+    let args = ClaudeSession.arguments(model: "", systemPrompt: "sys", options: options)
+    #expect(args.contains("--mcp-config") && args.contains("/tmp/mcp.json"))
+    #expect(args.contains("Read,Bash,mcp__a,mcp__b"))
+    #expect(args.contains("--restricted") && args.contains("--disallowedTools") && args.contains("Bash(sudo *)"))
+}
+
+@Test func toolStatuses() {
+    func status(_ name: String) -> EngineEvent? {
+        parseEngineLine(#"{"type":"stream_event","event":{"type":"content_block_start","content_block":{"type":"tool_use","name":"\#(name)"}}}"#)
+    }
+    #expect(status("Bash") == .status("Running a command…"))
+    #expect(status("Read") == .status("Looking at files…"))
+    #expect(status("mcp__context7__query-docs") == .status("Using context7…"))
+    #expect(status("WebFetch") == .status("Reading a page…"))
+    #expect(status("Mystery") == .status("Working…"))
+}

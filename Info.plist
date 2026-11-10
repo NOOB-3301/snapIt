@@ -12,5 +12,8 @@
     <key>LSUIElement</key><true/>
     <key>NSHighResolutionCapable</key><true/>
     <key>NSAppleEventsUsageDescription</key><string>snapIt reads the address of the page you are on so answers about a snap know the exact page.</string>
+	<key>NSDesktopFolderUsageDescription</key><string>The Ask Claude assistant works on files you ask it about.</string>
+	<key>NSDocumentsFolderUsageDescription</key><string>The Ask Claude assistant works on files you ask it about.</string>
+	<key>NSDownloadsFolderUsageDescription</key><string>The Ask Claude assistant works on files you ask it about.</string>
 </dict>
 </plist>

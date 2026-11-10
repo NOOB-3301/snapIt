@@ -1,3 +1,4 @@
+import Darwin
 import Foundation
 
 public enum EngineEvent: Equatable {
@@ -22,9 +23,7 @@ public func parseEngineLine(_ line: String) -> EngineEvent? {
         case "content_block_start":
             guard let block = event["content_block"] as? [String: Any], let type = block["type"] as? String else { return nil }
             if type == "text" { return .newBlock }
-            if type.hasSuffix("tool_use") {
-                return .status(block["name"] as? String == "WebFetch" ? "Reading a page…" : "Searching the web…")
-            }
+            if type.hasSuffix("tool_use") { return .status(toolStatus(block["name"] as? String ?? "")) }
             if type == "thinking" { return .status("Thinking…") }
         default: break
         }
@@ -35,6 +34,32 @@ public func parseEngineLine(_ line: String) -> EngineEvent? {
     default:
         return nil
     }
+}
+
+/// The status line for a tool call.
+func toolStatus(_ name: String) -> String {
+    switch name {
+    case "WebFetch": return "Reading a page…"
+    case "WebSearch": return "Searching the web…"
+    case "Bash": return "Running a command…"
+    case "Read", "Glob", "Grep": return "Looking at files…"
+    case "Write", "Edit": return "Writing a file…"
+    default:
+        let parts = name.components(separatedBy: "__")
+        return name.hasPrefix("mcp__") && parts.count >= 2 ? "Using \(parts[1])…" : "Working…"
+    }
+}
+
+public struct EngineOptions {
+    public var tools = ["WebSearch", "WebFetch"]      // built-in tools
+    public var disallowed: [String] = []              // --disallowedTools rules
+    public var cwd = FileManager.default.temporaryDirectory
+    public var restricted = false
+    public var mcpConfig: URL?                        // file written by McpStore
+    public var mcpServers: [String] = []              // names inside that file
+    public var environment: [String: String]?         // nil = inherited, minus CLAUDE*
+    public var silenceTimeout: TimeInterval = 30
+    public init() {}
 }
 
 /// One long-lived headless Claude Code process. Start it early so it is warm; each `send` is one turn
@@ -65,19 +90,29 @@ public final class ClaudeSession {
         return FileManager.default.isExecutableFile(atPath: path) ? path : nil
     }
 
-    public init(cli: String, model: String, systemPrompt: String) throws {
-        process.executableURL = URL(fileURLWithPath: cli)
-        // Isolated from the user's own Claude Code setup: no MCP servers, settings, hooks or skills.
-        // Only web tools exist, so nothing here can touch files or run commands.
+    /// The CLI arguments. With default options this is the snap route's list, unchanged.
+    public static func arguments(model: String, systemPrompt: String, options: EngineOptions) -> [String] {
         var args = ["-p", "--input-format", "stream-json", "--output-format", "stream-json",
                     "--include-partial-messages", "--verbose", "--strict-mcp-config", "--setting-sources", "",
-                    "--disable-slash-commands", "--no-session-persistence",
-                    "--tools", "WebSearch,WebFetch", "--allowedTools", "WebSearch,WebFetch",
-                    "--system-prompt", systemPrompt]
+                    "--disable-slash-commands", "--no-session-persistence"]
+        if options.restricted { args += ["--permission-prompts", "none", "--restricted"] }
+        let allowed = options.tools + options.mcpServers.map { "mcp__\($0)" }
+        args += ["--tools", options.tools.joined(separator: ","), "--allowedTools", allowed.joined(separator: ",")]
+        if let mcpConfig = options.mcpConfig { args += ["--mcp-config", mcpConfig.path] }
+        if !options.disallowed.isEmpty { args += ["--disallowedTools"] + options.disallowed }
+        args += ["--system-prompt", systemPrompt]
         if !model.isEmpty { args += ["--model", model] }
-        process.arguments = args
-        process.environment = ProcessInfo.processInfo.environment.filter { !$0.key.hasPrefix("CLAUDE") }
-        process.currentDirectoryURL = FileManager.default.temporaryDirectory
+        return args
+    }
+
+    public init(cli: String, model: String, systemPrompt: String, options: EngineOptions = EngineOptions()) throws {
+        process.executableURL = URL(fileURLWithPath: cli)
+        // Isolated from the user's own Claude Code setup: only the servers named in the options load, and no
+        // settings, hooks or skills. The tools are those in the options; the snap route has only web tools.
+        process.arguments = Self.arguments(model: model, systemPrompt: systemPrompt, options: options)
+        silenceTimeout = options.silenceTimeout
+        process.environment = options.environment ?? ProcessInfo.processInfo.environment.filter { !$0.key.hasPrefix("CLAUDE") }
+        process.currentDirectoryURL = options.cwd
         process.standardInput = input
         process.standardOutput = output
         process.standardError = FileHandle.nullDevice
@@ -119,7 +154,7 @@ public final class ClaudeSession {
         queue.async {
             self.handler = nil
             self.watchdog?.cancel()
-            if self.process.isRunning { self.process.terminate() }
+            if self.process.isRunning { Self.killTree(self.process.processIdentifier) }
         }
     }
 
@@ -147,9 +182,20 @@ public final class ClaudeSession {
         let item = DispatchWorkItem { [weak self] in
             guard let self else { return }
             self.finish(.failed("Claude did not respond in time"))
-            if self.process.isRunning { self.process.terminate() }
+            if self.process.isRunning { Self.killTree(self.process.processIdentifier) }
         }
         watchdog = item
         queue.asyncAfter(deadline: .now() + silenceTimeout, execute: item)
+    }
+
+    /// Foundation cannot start a new process group, so signal descendants before the CLI itself; nothing is left orphaned.
+    private static func killTree(_ pid: pid_t) {
+        let count = proc_listchildpids(pid, nil, 0)
+        if count > 0 {
+            var kids = [pid_t](repeating: 0, count: Int(count))
+            let got = proc_listchildpids(pid, &kids, Int32(MemoryLayout<pid_t>.size * kids.count))
+            for kid in kids.prefix(max(0, Int(got))) { killTree(kid) }
+        }
+        kill(pid, SIGTERM)
     }
 }

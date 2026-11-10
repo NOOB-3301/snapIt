@@ -29,3 +29,36 @@ struct IconStyle: ButtonStyle {
             .onHover { hover = $0 }
     }
 }
+
+/// Which MCP servers Claude may use; the count shows when any are ticked.
+struct McpMenu: View {
+    @ObservedObject private var store = McpStore.shared
+    let onChange: () -> Void
+    var disabled = false
+
+    var body: some View {
+        Menu {
+            if store.names.isEmpty {
+                Text("No servers in ~/.claude.json")
+            } else {
+                ForEach(store.names, id: \.self) { name in
+                    Toggle(name, isOn: Binding(
+                        get: { store.selected.contains(name) },
+                        set: { on in
+                            store.selected.removeAll { $0 == name }
+                            if on { store.selected.append(name) }
+                            onChange()
+                        }))
+                }
+            }
+        } label: {
+            HStack(spacing: 2) {
+                Image(systemName: "powerplug")
+                if !store.selected.isEmpty { Text("\(store.selected.count)").font(.system(size: 11, weight: .semibold)).foregroundStyle(Color.accentColor) }
+            }
+        }
+        .menuStyle(.button).buttonStyle(IconStyle()).menuIndicator(.hidden).fixedSize()
+        .disabled(disabled)
+        .help("MCP servers Claude may use").accessibilityLabel("MCP servers")
+    }
+}
